@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Environment — never commit secrets
+.env
+.env.*
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Whisper model (large binary)
+models/
+
+# Recordings (audio files)
+data/recordings/
+
+# Build output
+dist/
+build/
+
+# Tauri build artifacts
+dot-app/src-tauri/target/
+dot-app/src-tauri/gen/
+dot-app/dist/
+dot-app/node_modules/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+data/memory.db
+*.wav
+.claude/

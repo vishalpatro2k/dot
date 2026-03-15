@@ -1,0 +1,275 @@
+/* ── Reset ─────────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  background: transparent !important;
+  background-color: transparent !important;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── App shell ─────────────────────────────────────────────────────────── */
+.app {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px;
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* ── Pill wrapper ──────────────────────────────────────────────────────── */
+/* Tight black pill that hugs the dot (and timer when recording) */
+.dot-container {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #0a0a0a;
+  border-radius: 999px;
+  padding: 10px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow:
+    0 2px 12px rgba(0, 0, 0, 0.6),
+    0 0 0 0.5px rgba(255, 255, 255, 0.04) inset;
+}
+
+/* ── The Dot ───────────────────────────────────────────────────────────── */
+.dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    width 0.35s cubic-bezier(0.34, 1.56, 0.64, 1),
+    height 0.35s cubic-bezier(0.34, 1.56, 0.64, 1),
+    border-radius 0.3s ease,
+    background-color 0.3s ease,
+    opacity 0.3s ease,
+    box-shadow 0.3s ease,
+    transform 0.3s ease;
+  will-change: transform;
+}
+
+/* ── idle: warm orange glow, breathing ─────────────────────────────────── */
+.dot--idle {
+  background: radial-gradient(circle at 38% 35%, #ffb347, #f4723a 60%, #d94f1e);
+  box-shadow:
+    0 0 10px rgba(244, 114, 58, 0.55),
+    0 0 22px rgba(244, 114, 58, 0.2);
+  animation: breathing 3.5s ease-in-out infinite;
+}
+
+@keyframes breathing {
+  0%, 100% { transform: scale(1);     box-shadow: 0 0 10px rgba(244,114,58,0.55), 0 0 22px rgba(244,114,58,0.2); }
+  50%       { transform: scale(1.08); box-shadow: 0 0 16px rgba(244,114,58,0.75), 0 0 32px rgba(244,114,58,0.3); }
+}
+
+/* ── listening: brighter orange, slightly larger ───────────────────────── */
+.dot--listening {
+  background: radial-gradient(circle at 38% 35%, #ffd080, #ffaa33 60%, #f47a20);
+  transform: scale(1.18);
+  box-shadow:
+    0 0 16px rgba(255, 170, 51, 0.7),
+    0 0 32px rgba(255, 170, 51, 0.3);
+}
+
+/* ── recording: red pulse ───────────────────────────────────────────────── */
+.dot--recording {
+  background: radial-gradient(circle at 38% 35%, #ff6b6b, #e53e3e 60%, #c0392b);
+  animation: recording-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes recording-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 12px rgba(229, 62, 62, 0.6), 0 0 24px rgba(229, 62, 62, 0.25);
+  }
+  50% {
+    transform: scale(1.14);
+    box-shadow: 0 0 20px rgba(229, 62, 62, 0.85), 0 0 40px rgba(229, 62, 62, 0.4);
+  }
+}
+
+/* ── thinking: orange wobble ────────────────────────────────────────────── */
+.dot--thinking {
+  background: radial-gradient(circle at 38% 35%, #ffb347, #f4723a 60%, #d94f1e);
+  opacity: 0.7;
+  animation: thinking-wobble 1.5s ease-in-out infinite;
+}
+
+@keyframes thinking-wobble {
+  0%   { border-radius: 50%;              transform: scale(1); }
+  20%  { border-radius: 50% 40% 50% 40%; transform: scale(1.05) rotate(6deg); }
+  40%  { border-radius: 40% 50% 40% 50%; transform: scale(0.95) rotate(0deg); }
+  60%  { border-radius: 50% 40% 50% 40%; transform: scale(1.05) rotate(-6deg); }
+  80%  { border-radius: 40% 50% 40% 50%; transform: scale(0.95) rotate(0deg); }
+  100% { border-radius: 50%;              transform: scale(1); }
+}
+
+/* ── happy: orange pill squish ──────────────────────────────────────────── */
+.dot--happy {
+  width: 28px;
+  height: 14px;
+  border-radius: 999px;
+  background: radial-gradient(circle at 38% 40%, #ffd080, #ffaa33 60%, #f47a20);
+  box-shadow: 0 0 18px rgba(255, 170, 51, 0.7), 0 0 36px rgba(255, 170, 51, 0.3);
+  animation: happy-squish 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes happy-squish {
+  0%   { transform: scale(1); }
+  35%  { transform: scaleX(1.3) scaleY(0.65); }
+  70%  { transform: scaleX(0.9) scaleY(1.1); }
+  100% { transform: scale(1); }
+}
+
+/* ── alert: amber bounce ────────────────────────────────────────────────── */
+.dot--alert {
+  background: radial-gradient(circle at 38% 35%, #ffe066, #f5a623 60%, #e08c10);
+  box-shadow: 0 0 14px rgba(245, 166, 35, 0.65), 0 0 28px rgba(245, 166, 35, 0.25);
+  animation: alert-bounce 0.6s ease-in-out infinite;
+}
+
+@keyframes alert-bounce {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-5px); }
+}
+
+/* ── sleeping: flattened orange line ────────────────────────────────────── */
+.dot--sleeping {
+  width: 20px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(244, 114, 58, 0.3);
+  box-shadow: none;
+  opacity: 0.4;
+}
+
+/* ── processing: rotating morph ─────────────────────────────────────────── */
+.dot--processing {
+  background: radial-gradient(circle at 38% 35%, #ffb347, #f4723a 60%, #d94f1e);
+  opacity: 0.6;
+  animation: processing-morph 1.8s linear infinite;
+}
+
+@keyframes processing-morph {
+  0%   { border-radius: 50%;              transform: rotate(0deg); }
+  25%  { border-radius: 60% 40% 60% 40%; transform: rotate(90deg); }
+  50%  { border-radius: 40% 60% 40% 60%; transform: rotate(180deg); }
+  75%  { border-radius: 60% 40% 60% 40%; transform: rotate(270deg); }
+  100% { border-radius: 50%;              transform: rotate(360deg); }
+}
+
+/* ── Recording timer ────────────────────────────────────────────────────── */
+.recording-timer {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Mono", monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(229, 62, 62, 0.9);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+/* ── Status label ───────────────────────────────────────────────────────── */
+.status-label {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 4px 12px;
+  white-space: nowrap;
+  animation: status-in 0.2s ease, status-blink 1.8s ease-in-out infinite;
+}
+
+.status-label--done {
+  color: rgba(110, 220, 130, 0.95);
+  background: rgba(110, 220, 130, 0.08);
+  border-color: rgba(110, 220, 130, 0.2);
+  animation: status-in 0.2s ease; /* stop blinking once done */
+}
+
+@keyframes status-in {
+  from { opacity: 0; transform: translateY(-5px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes status-blink {
+  0%, 100% { opacity: 0.5; }
+  50%       { opacity: 0.9; }
+}
+
+/* ── Input area ─────────────────────────────────────────────────────────── */
+.input-wrapper {
+  width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  animation: slide-down 0.2s cubic-bezier(0.34, 1.2, 0.64, 1);
+}
+
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)   scale(1); }
+}
+
+.dot-input {
+  width: 100%;
+  background: #111111;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 9px 14px;
+  color: rgba(255, 255, 255, 0.9);
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.dot-input::placeholder {
+  color: rgba(255, 255, 255, 0.28);
+  font-style: italic;
+}
+
+.dot-input:focus {
+  border-color: rgba(244, 114, 58, 0.5);
+  box-shadow: 0 0 0 3px rgba(244, 114, 58, 0.1);
+}
+
+.dot-input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── Response bubble ─────────────────────────────────────────────────────── */
+.dot-response {
+  padding: 9px 13px;
+  background: #111111;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  color: rgba(255, 255, 255, 0.8);
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 12px;
+  line-height: 1.55;
+  max-height: 80px;
+  overflow-y: auto;
+  animation: slide-down 0.15s ease;
+}
+
+.dot-response::-webkit-scrollbar { width: 3px; }
+.dot-response::-webkit-scrollbar-thumb {
+  background: rgba(244, 114, 58, 0.3);
+  border-radius: 3px;
+}
