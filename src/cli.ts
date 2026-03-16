@@ -7,7 +7,8 @@
  *   npm run cli -- "What's my day?"      # Single query
  *   npm run cli -- record-meeting        # Record + transcribe + summarize → Notion
  *   npm run cli -- summarize <file.wav>  # Summarize an existing recording → Notion
- *   npm run cli -- --auth-calendar       # Authenticate calendar
+ *   npm run cli -- --auth-google          # Authenticate Google (Calendar + Gmail)
+ *   npm run cli -- --auth-calendar       # Alias for --auth-google
  *   npm run cli -- --stats               # Show usage stats
  *   npm run cli -- --brief               # Morning briefing
  */
@@ -17,6 +18,7 @@ import * as readline from "readline";
 import { agent } from "./agent.js";
 import { calendar } from "./tools/calendar.js";
 import { recordMeeting, summarizeMeeting } from "./commands/meeting.js";
+import { runAuthFlow } from "./tools/google-auth.js";
 
 const args = process.argv.slice(2);
 
@@ -37,9 +39,35 @@ async function main() {
     return;
   }
 
+  // Setup Notion tasks database
+  if (args.includes("--setup-tasks")) {
+    const idx = args.indexOf("--setup-tasks");
+    const databaseId = args[idx + 1];
+    if (!databaseId) {
+      console.log("\nUsage: npm run cli -- --setup-tasks <notion-database-id>\n");
+      console.log("To find your database ID:");
+      console.log("  1. Open your tasks database in Notion");
+      console.log("  2. Click Share → Copy link");
+      console.log("  3. The ID is the 32-char string after notion.so/ (before ?v=)\n");
+      return;
+    }
+    const { memory } = await import("./memory/store.js");
+    memory.init();
+    const { notionTasks } = await import("./tools/notion-tasks.js");
+    const ok = await notionTasks.discoverAndSave(databaseId);
+    if (ok) console.log('\n✓ Try: npm run cli -- "What\'s on my plate?"');
+    return;
+  }
+
   // Handle special commands
+  if (args.includes("--auth-google")) {
+    await runAuthFlow();
+    return;
+  }
+
+  // Legacy alias
   if (args.includes("--auth-calendar")) {
-    await calendar.authenticate();
+    await runAuthFlow();
     return;
   }
 

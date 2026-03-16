@@ -15,13 +15,27 @@
  *   POST /recording/stop      - Stop capture and run full pipeline → Notion
  */
 
+import "dotenv/config"; // must be first — loads ANTHROPIC_API_KEY before any module initializes Anthropic()
+
 import express from "express";
 import { spawn, execSync } from "child_process";
 import type { ChildProcess } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
 import { agent } from "./agent.js";
-import "dotenv/config";
+import { gmail } from "./tools/gmail.js";
+import { calendar } from "./tools/calendar.js";
+import { wellness } from "./tools/wellness-analyzer.js";
+import { healthData } from "./tools/health-data.js";
+import { notionTasks } from "./tools/notion-tasks.js";
+import { nudgeEngine, type Nudge } from "./tools/nudges.js";
+import { generateWeeklyReview } from "./tools/weekly-review.js";
+import { focusMode } from "./tools/focus-mode.js";
+import { meetingPrep } from "./tools/meeting-prep.js";
+import { smartScheduler } from "./tools/smart-scheduling.js";
+import { goalTracker } from "./tools/goals.js";
+import { predictiveNudges } from "./tools/predictive-nudges.js";
+import { actionExecutor } from "./tools/action-executor.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -85,12 +99,23 @@ function runPipeline(wavPath: string, title: string): Promise<string> {
       [PIPELINE_SCRIPT, wavPath, "--identify", "--summarize", "--title", title],
       { cwd: PROJECT_ROOT, stdio: ["ignore", "pipe", "pipe"] }
     );
-    proc.stderr.on("data", (c: Buffer) => process.stderr.write(c));
     let out = "";
+    let errOut = "";
     proc.stdout.on("data", (c: Buffer) => { out += c.toString(); });
+    proc.stderr.on("data", (c: Buffer) => {
+      process.stderr.write(c);   // still stream to terminal
+      errOut += c.toString();
+    });
     proc.on("close", (code) => {
       if (code === 0) resolve(out.trim());
-      else reject(new Error(`Pipeline exited ${code}`));
+      else {
+        // Prefer the last non-empty stderr line (Python's sys.exit message lives there)
+        const lastErrLine = errOut.trim().split(/\r?\n/).reverse().find((l) => l.trim()) ?? "";
+        const msg = lastErrLine.startsWith("Error:") || lastErrLine.includes("Whisper")
+          ? lastErrLine
+          : `Pipeline exited ${code}${lastErrLine ? ": " + lastErrLine : ""}`;
+        reject(new Error(msg));
+      }
     });
   });
 }
@@ -127,7 +152,7 @@ app.post("/chat", async (req, res) => {
   }
 });
 
-// GET /brief
+// GET /brief — morning briefing via agent (LLM-formatted)
 app.get("/brief", async (_req, res) => {
   try {
     const r = await agent.morningBrief();
@@ -137,9 +162,67 @@ app.get("/brief", async (_req, res) => {
   }
 });
 
+// GET /recap — end-of-day recap via agent (LLM-formatted)
+app.get("/recap", async (_req, res) => {
+  try {
+    const r = await agent.ask("Give me my day recap.");
+    res.json({ answer: r.answer, model: r.model });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /wellness — raw wellness stats + patterns
+app.get("/wellness", async (_req, res) => {
+  try {
+    const [{ stats, insights }, weekComparison, patterns] = await Promise.all([
+      wellness.analyzeTodayCalendar(),
+      wellness.getWeekComparison(),
+      Promise.resolve(wellness.getPatterns()),
+    ]);
+    res.json({ today: stats, insights, week: weekComparison, patterns });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /stats
 app.get("/stats", (_req, res) => {
   res.json(agent.getStats());
+});
+
+// GET /emails/unread
+app.get("/emails/unread", async (_req, res) => {
+  try {
+    const emails = await gmail.getUnreadEmails(20);
+    const count = await gmail.getUnreadCount();
+    res.json({ count, emails });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /emails/smart — filtered inbox (only actionable emails)
+app.get("/emails/smart", async (_req, res) => {
+  try {
+    const result = await gmail.getSmartInbox(50);
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /calendar/stats
+app.get("/calendar/stats", async (_req, res) => {
+  try {
+    const [todayEvents, weekStats] = await Promise.all([
+      calendar.getTodaysEvents(),
+      calendar.getWeekStats(),
+    ]);
+    res.json({ today: todayEvents, week: weekStats });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // POST /recording/start
@@ -214,16 +297,341 @@ app.post("/recording/stop", async (req, res) => {
     });
 });
 
+// ── Tasks endpoints ───────────────────────────────────────────────────────────
+
+// GET /tasks
+app.get("/tasks", async (_req, res) => {
+  try {
+    const [tasks, overdue] = await Promise.all([
+      notionTasks.getTodaysTasks(),
+      notionTasks.getOverdueTasks(),
+    ]);
+    res.json({ tasks, overdue });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /tasks
+app.post("/tasks", async (req, res) => {
+  const { title, dueDate, priority } = req.body ?? {};
+  if (!title) return void res.status(400).json({ error: "title required" });
+  try {
+    const task = await notionTasks.addTask(title, { dueDate, priority });
+    res.json({ success: true, task });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /tasks/:id/complete
+app.post("/tasks/:id/complete", async (req, res) => {
+  try {
+    const success = await notionTasks.completeTask(req.params.id);
+    res.json({ success });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /nudges
+app.get("/nudges", async (_req, res) => {
+  try {
+    const nudges = await nudgeEngine.getPendingNudges();
+    res.json({ nudges });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /review/weekly
+app.get("/review/weekly", async (_req, res) => {
+  try {
+    const review = await generateWeeklyReview();
+    res.json(review);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Focus Mode endpoints ──────────────────────────────────────────────────────
+
+// POST /focus/start
+app.post("/focus/start", async (req, res) => {
+  const { minutes = 90, task } = req.body ?? {};
+  try {
+    const session = await focusMode.start(Number(minutes), task);
+    res.json({ success: true, session });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// POST /focus/stop
+app.post("/focus/stop", async (_req, res) => {
+  try {
+    const session = await focusMode.stop();
+    res.json({ success: true, session });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /focus/extend
+app.post("/focus/extend", async (req, res) => {
+  const { minutes = 30 } = req.body ?? {};
+  try {
+    const session = await focusMode.extend(Number(minutes));
+    res.json({ success: true, session });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /focus/status
+app.get("/focus/status", (_req, res) => {
+  res.json(focusMode.getStatus());
+});
+
+// GET /focus/stats
+app.get("/focus/stats", (_req, res) => {
+  res.json(focusMode.getStats());
+});
+
+// ── Meeting Prep endpoints ────────────────────────────────────────────────────
+
+// GET /meeting/prep?q=<query>
+app.get("/meeting/prep", async (req, res) => {
+  const q = String(req.query.q ?? "");
+  if (!q) return void res.status(400).json({ error: "q (meeting query) required" });
+  try {
+    const ctx = await meetingPrep.prepareForMeeting(q);
+    if (!ctx) return void res.status(404).json({ error: "No matching meeting found" });
+    res.json(ctx);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /meeting/notes
+app.post("/meeting/notes", (req, res) => {
+  const { title, summary, actionItems } = req.body ?? {};
+  if (!title || !summary) return void res.status(400).json({ error: "title and summary required" });
+  try {
+    meetingPrep.saveMeetingNotes(title, summary, actionItems);
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Smart Scheduling endpoints ────────────────────────────────────────────────
+
+// GET /schedule/find?duration=60&days=5
+app.get("/schedule/find", async (req, res) => {
+  const duration = Number(req.query.duration ?? 60);
+  const days = Number(req.query.days ?? 5);
+  try {
+    const suggestion = await smartScheduler.findFreeSlots(duration, days);
+    res.json({ formatted: smartScheduler.formatSuggestion(suggestion), ...suggestion });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /schedule/focus-block?duration=120
+app.get("/schedule/focus-block", async (req, res) => {
+  const duration = Number(req.query.duration ?? 120);
+  try {
+    const suggestion = await smartScheduler.suggestFocusBlock(duration);
+    res.json({ formatted: smartScheduler.formatSuggestion(suggestion), ...suggestion });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /schedule/conflicts  { start: ISO string, duration: 60 }
+app.post("/schedule/conflicts", async (req, res) => {
+  const { start, duration = 60 } = req.body ?? {};
+  if (!start) return void res.status(400).json({ error: "start (ISO date string) required" });
+  try {
+    const result = await smartScheduler.checkConflicts(new Date(start), Number(duration));
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Goals endpoints ───────────────────────────────────────────────────────────
+
+// GET /goals
+app.get("/goals", (_req, res) => {
+  const progress = goalTracker.getProgress();
+  res.json({ goals: progress });
+});
+
+// POST /goals  { type, period, target }
+app.post("/goals", (req, res) => {
+  const { type, period, target } = req.body ?? {};
+  if (!type || !period || target === undefined) {
+    return void res.status(400).json({ error: "type, period, and target are required" });
+  }
+  try {
+    const goal = goalTracker.addGoal(type, period, Number(target));
+    res.json({ goal });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /goals/:id
+app.delete("/goals/:id", (req, res) => {
+  const removed = goalTracker.removeGoal(req.params.id);
+  res.json({ removed });
+});
+
+// ── Predictive nudges endpoint ────────────────────────────────────────────────
+
+// GET /insights
+app.get("/insights", async (_req, res) => {
+  try {
+    const nudges = await predictiveNudges.getNudges();
+    res.json({ nudges });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Action endpoint ───────────────────────────────────────────────────────────
+
+// POST /action  { type, ... }
+app.post("/action", async (req, res) => {
+  const action = req.body ?? {};
+  if (!action.type) {
+    return void res.status(400).json({ error: "action type required" });
+  }
+  try {
+    // Parse date strings to Date objects
+    if (action.startTime) action.startTime = new Date(action.startTime);
+    if (action.endTime) action.endTime = new Date(action.endTime);
+    const result = await actionExecutor.execute(action);
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Apple Health endpoints ────────────────────────────────────────────────────
+
+// POST /apple-health  — called by iOS Shortcut each morning
+app.post("/apple-health", (req, res) => {
+  try {
+    const d = req.body ?? {};
+
+    if (!d.date || !d.sleep) {
+      return void res.status(400).json({ error: "Missing required fields: date, sleep" });
+    }
+
+    const payload = {
+      date: String(d.date),
+      sleep: {
+        totalHours: parseFloat(d.sleep.totalHours) || 0,
+        inBedHours: parseFloat(d.sleep.inBedHours) || 0,
+        efficiency: parseFloat(d.sleep.efficiency) || 0,
+        bedtime: String(d.sleep.bedtime || ""),
+        wakeTime: String(d.sleep.wakeTime || ""),
+        quality: d.sleep.quality,
+      },
+      activity: {
+        steps: parseInt(d.activity?.steps) || 0,
+        activeCalories: parseInt(d.activity?.activeCalories) || 0,
+        exerciseMinutes: parseInt(d.activity?.exerciseMinutes) || 0,
+        standHours: parseInt(d.activity?.standHours) || 0,
+        moveGoalPercent: parseFloat(d.activity?.moveGoalPercent) || 0,
+      },
+      vitals: d.vitals
+        ? { restingHR: parseInt(d.vitals.restingHR) || 0, hrv: parseInt(d.vitals.hrv) || 0 }
+        : undefined,
+      receivedAt: new Date().toISOString(),
+    };
+
+    healthData.saveHealthData(payload);
+    const insights = healthData.generateHealthInsights(payload);
+    res.json({ success: true, message: `Health data saved for ${payload.date}`, insights });
+  } catch (e: any) {
+    console.error("Health data error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /apple-health/summary
+app.get("/apple-health/summary", (_req, res) => {
+  try {
+    const sleep = healthData.getLastNightSleep();
+    const patterns = healthData.getHealthPatterns();
+    const history = healthData.getRecentHealth(7);
+    res.json({ lastNight: sleep, patterns, history });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /apple-health/insights
+app.get("/apple-health/insights", (_req, res) => {
+  try {
+    const today = new Date().toISOString().split("T")[0];
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const data = healthData.getHealthData(today) ?? healthData.getHealthData(yesterday.toISOString().split("T")[0]);
+    if (!data) return void res.json({ insights: [], message: "No health data yet" });
+    const patterns = healthData.getHealthPatterns();
+    res.json({ insights: healthData.generateHealthInsights(data, patterns) });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 async function start() {
   await agent.init();
+
+  // Start nudge engine and log nudges to console
+  nudgeEngine.start();
+  nudgeEngine.on("nudge", (nudge: Nudge) => {
+    console.log(`\n🔔 Nudge [${nudge.priority}]: ${nudge.title} — ${nudge.message}`);
+  });
+
+  // Focus mode event listeners
+  focusMode.on("start", (s) => console.log(`\n🎯 Focus started: ${s.duration}min${s.task ? ` — ${s.task}` : ""}`));
+  focusMode.on("complete", (s) => console.log(`\n✅ Focus complete: ${s.actualMinutes}min of deep work`));
+  focusMode.on("stop", (s) => console.log(`\n⏹  Focus stopped after ${s.actualMinutes}min`));
+
   app.listen(PORT, () => {
     console.log(`\n● Dot server  http://localhost:${PORT}`);
     console.log("  GET  /status");
     console.log("  POST /chat");
     console.log("  POST /recording/start");
-    console.log("  POST /recording/stop\n");
+    console.log("  POST /recording/stop");
+    console.log("  GET  /emails/unread");
+    console.log("  GET  /emails/smart");
+    console.log("  GET  /calendar/stats");
+    console.log("  GET  /recap");
+    console.log("  GET  /wellness");
+    console.log("  GET  /tasks");
+    console.log("  POST /tasks");
+    console.log("  POST /tasks/:id/complete");
+    console.log("  GET  /nudges");
+    console.log("  GET  /review/weekly");
+    console.log("  POST /focus/start  POST /focus/stop  POST /focus/extend");
+    console.log("  GET  /focus/status  GET /focus/stats");
+    console.log("  GET  /meeting/prep  POST /meeting/notes");
+    console.log("  GET  /schedule/find  GET /schedule/focus-block  POST /schedule/conflicts");
+    console.log("  GET  /goals  POST /goals  DELETE /goals/:id");
+    console.log("  GET  /insights  POST /action");
+    console.log("  POST /apple-health");
+    console.log("  GET  /apple-health/summary");
+    console.log("  GET  /apple-health/insights\n");
   });
 }
 

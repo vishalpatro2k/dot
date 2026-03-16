@@ -1,269 +1,182 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { LogicalSize, LogicalPosition } from "@tauri-apps/api/dpi";
-import { listen } from "@tauri-apps/api/event";
-import Dot, { DotState } from "./Dot";
-import Input from "./Input";
-import { sendChat, startRecording, stopRecording, getStatus } from "./api";
+import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
+import { Dot } from "./components/Dot";
+import { Input } from "./components/Input";
+import { ThinkingText } from "./components/ThinkingText";
+import { Response } from "./components/Response";
+import { sendChat, stopRecording as apiStopRecording, getStatus } from "./api";
+import "./styles.css";
 
-const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
-const COLLAPSED_SIZE  = new LogicalSize(108, 72);
-const STATUS_SIZE     = new LogicalSize(270, 126);
-const EXPANDED_SIZE   = new LogicalSize(300, 290);
+type AppState = "idle" | "listening" | "recording" | "thinking" | "happy" | "sleeping";
 
-export default function App() {
-  const [dotState, setDotState]           = useState<DotState>("idle");
-  const [isExpanded, setIsExpanded]       = useState(false);
-  const [response, setResponse]           = useState<string | undefined>();
-  const [isLoading, setIsLoading]         = useState(false);
-  const [isRecording, setIsRecording]     = useState(false);
+const WIN_COLLAPSED = new LogicalSize(400, 200);
+const WIN_EXPANDED  = new LogicalSize(480, 520);
+
+function App() {
+  const [state, setState] = useState<AppState>("idle");
+  const [response, setResponse] = useState<string | null>(null);
+  const [isError, setIsError] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
-  const [statusText, setStatusText]       = useState<string>("");
-  const [statusDone, setStatusDone]       = useState(false);
+  const pipelinePoller = useRef<number | null>(null);
 
-  const idleTimer      = useRef<ReturnType<typeof setTimeout>  | null>(null);
-  const recordTimer    = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pipelinePoller = useRef<ReturnType<typeof setInterval> | null>(null);
-  const containerRef   = useRef<HTMLDivElement>(null);
-  const isSleeping     = useRef(false);
-
-  // ── window: place near menubar on first load ───────────────────────────────
+  // Position window at top-center on first load
   useEffect(() => {
-    const x = Math.floor(window.screen.width / 2 - 80);
-    getCurrentWindow().setPosition(new LogicalPosition(x, 10)).catch(() => {});
+    const w = getCurrentWindow();
+    const x = Math.floor(window.screen.width / 2 - 200);
+    w.setPosition(new LogicalPosition(x, 24)).catch(() => {});
   }, []);
 
-  // ── idle / sleeping ────────────────────────────────────────────────────────
-  const resetIdle = useCallback(() => {
-    if (idleTimer.current) clearTimeout(idleTimer.current);
-    if (isSleeping.current) {
-      isSleeping.current = false;
-      setDotState("idle");
-    }
-    idleTimer.current = setTimeout(() => {
-      isSleeping.current = true;
-      setDotState("sleeping");
-    }, IDLE_TIMEOUT_MS);
-  }, []);
-
+  // Expand/collapse window based on state
   useEffect(() => {
-    resetIdle();
-    const wake = () => resetIdle();
-    window.addEventListener("mousemove", wake);
-    window.addEventListener("keydown", wake);
-    return () => {
-      window.removeEventListener("mousemove", wake);
-      window.removeEventListener("keydown", wake);
-      if (idleTimer.current) clearTimeout(idleTimer.current);
-    };
-  }, [resetIdle]);
+    const expanded = !!response || state === "listening";
+    const size = expanded ? WIN_EXPANDED : WIN_COLLAPSED;
+    const x = Math.floor(window.screen.width / 2 - size.width / 2);
+    const w = getCurrentWindow();
+    w.setSize(size).catch(() => {});
+    w.setPosition(new LogicalPosition(x, 24)).catch(() => {});
+  }, [response, state]);
 
-  // ── global hotkey ⌘⇧D ─────────────────────────────────────────────────────
+  // Recording timer
   useEffect(() => {
-    let cleanup: (() => void) | undefined;
-    listen<null>("toggle-input", () => {
-      resetIdle();
-      setIsExpanded((prev) => {
-        const next = !prev;
-        getCurrentWindow().setSize(next ? EXPANDED_SIZE : COLLAPSED_SIZE).catch(() => {});
-        if (!next) setResponse(undefined);
-        return next;
-      });
-    }).then((fn) => { cleanup = fn; });
-    return () => cleanup?.();
-  }, [resetIdle]);
-
-  // ── click outside → collapse ───────────────────────────────────────────────
-  useEffect(() => {
-    if (!isExpanded) return;
-    const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        collapse();
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [isExpanded]);
-
-  // ── server status polling (nudges + sync recording state) ─────────────────
-  useEffect(() => {
-    const poll = setInterval(async () => {
-      try {
-        const s = await getStatus();
-        if (s.hasNudges && !isLoading && !isRecording && !isSleeping.current) {
-          setDotState("alert");
-        }
-      } catch { /* server offline */ }
-    }, 15_000);
-    return () => clearInterval(poll);
-  }, [isLoading, isRecording]);
-
-  // ── recording timer ────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (isRecording) {
+    if (state !== "recording") {
       setRecordingTime(0);
-      recordTimer.current = setInterval(() => setRecordingTime((t) => t + 1), 1000);
-    } else {
-      if (recordTimer.current) clearInterval(recordTimer.current);
+      return;
     }
-    return () => { if (recordTimer.current) clearInterval(recordTimer.current); };
-  }, [isRecording]);
+    const interval = window.setInterval(() => setRecordingTime((t) => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, [state]);
 
-  // ── pipeline result poller — runs after recording stops ───────────────────
-  const startPipelinePolling = useCallback(() => {
-    if (pipelinePoller.current) clearInterval(pipelinePoller.current);
+  // Idle → Sleeping after 5 minutes
+  useEffect(() => {
+    if (state !== "idle") return;
+    let elapsed = 0;
+    const interval = window.setInterval(() => {
+      elapsed += 1;
+      if (elapsed >= 300) {
+        setState("sleeping");
+        clearInterval(interval);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [state]);
 
-    setStatusText("processing…");
-    setStatusDone(false);
-    getCurrentWindow().setSize(STATUS_SIZE).catch(() => {});
+  // Clean up pipeline poller on unmount
+  useEffect(() => {
+    return () => {
+      if (pipelinePoller.current) clearInterval(pipelinePoller.current);
+    };
+  }, []);
 
-    pipelinePoller.current = setInterval(async () => {
+  const showResponse = (text: string, error = false) => {
+    setResponse(text);
+    setIsError(error);
+  };
+
+  const stopRecordingAndPoll = async () => {
+    setState("thinking");
+
+    try {
+      await apiStopRecording();
+    } catch (err: any) {
+      showResponse(err?.message ?? "Failed to stop recording.", true);
+      setState("idle");
+      return;
+    }
+
+    let attempts = 0;
+    pipelinePoller.current = window.setInterval(async () => {
+      attempts++;
       try {
         const s = await getStatus();
         if (s.state !== "processing") {
           clearInterval(pipelinePoller.current!);
           pipelinePoller.current = null;
 
-          // Show done banner
-          setStatusText(s.lastError ? "✗ pipeline error" : "✓ saved to Notion");
-          setStatusDone(!s.lastError);
-          setDotState("happy");
-
-          // After 2.5s: if there's a summary open it, otherwise collapse back
-          setTimeout(() => {
-            const text = s.lastSummary || s.lastError || null;
-            if (text) {
-              setResponse(text);
-              setIsExpanded(true);
-              setStatusText("");
-              getCurrentWindow().setSize(EXPANDED_SIZE).catch(() => {});
-            } else {
-              setStatusText("");
-              getCurrentWindow().setSize(COLLAPSED_SIZE).catch(() => {});
-            }
-            setDotState("idle");
-          }, 2500);
+          if (s.lastError) {
+            showResponse(s.lastError, true);
+            setState("idle");
+          } else {
+            showResponse(s.lastSummary || "Meeting saved to Notion.");
+            setState("happy");
+            setTimeout(() => setState("idle"), 4000);
+          }
         }
-      } catch { /* ignore */ }
-    }, 2500);
-  }, []);
-
-  // ── helpers ────────────────────────────────────────────────────────────────
-  const collapse = () => {
-    setIsExpanded(false);
-    setResponse(undefined);
-    setStatusText("");
-    getCurrentWindow().setSize(COLLAPSED_SIZE).catch(() => {});
-  };
-
-  // ── dot click ──────────────────────────────────────────────────────────────
-  const handleDotClick = () => {
-    if (isLoading) return;
-    resetIdle();
-    if (isSleeping.current) return;
-
-    const next = !isExpanded;
-    setIsExpanded(next);
-    getCurrentWindow().setSize(next ? EXPANDED_SIZE : COLLAPSED_SIZE).catch(() => {});
-    if (next) {
-      setDotState("listening");
-    } else {
-      setResponse(undefined);
-      if (!isRecording) setDotState("idle");
-    }
-  };
-
-  // ── double-click → toggle recording ───────────────────────────────────────
-  const handleDoubleClick = async () => {
-    resetIdle();
-    if (isRecording) {
-      // stop
-      setIsRecording(false);
-      setDotState("thinking");
-      try {
-        await stopRecording();
-        startPipelinePolling();
-      } catch (err) {
-        console.error("stop recording failed:", err);
-        setStatusText("✗ server not running");
-        setStatusDone(false);
-        getCurrentWindow().setSize(STATUS_SIZE).catch(() => {});
-        setTimeout(() => {
-          setStatusText("");
-          getCurrentWindow().setSize(COLLAPSED_SIZE).catch(() => {});
-        }, 3000);
-        setDotState("idle");
-      }
-    } else {
-      // start
-      setIsRecording(true);
-      try {
-        await startRecording();
       } catch {
-        setIsRecording(false);
-        setStatusText("✗ server not running");
-        setStatusDone(false);
-        getCurrentWindow().setSize(STATUS_SIZE).catch(() => {});
-        setTimeout(() => {
-          setStatusText("");
-          getCurrentWindow().setSize(COLLAPSED_SIZE).catch(() => {});
-        }, 3000);
-        setDotState("idle");
+        if (attempts >= 24) {
+          clearInterval(pipelinePoller.current!);
+          pipelinePoller.current = null;
+          showResponse("Pipeline timed out. Check server logs.", true);
+          setState("idle");
+        }
       }
+    }, 2500);
+  };
+
+  const handleDotClick = () => {
+    if (state === "sleeping") { setState("idle"); return; }
+    if (state === "recording") { stopRecordingAndPoll(); return; }
+    if (state === "idle") setState("listening");
+  };
+
+  const handleLongPress = () => {
+    if (state === "recording") {
+      stopRecordingAndPoll();
+    } else if (state !== "thinking") {
+      setState("recording");
     }
   };
 
-  // ── chat submit ────────────────────────────────────────────────────────────
   const handleSubmit = async (message: string) => {
-    resetIdle();
-    setIsLoading(true);
-    setDotState("thinking");
-    setResponse(undefined);
+    setState("thinking");
     try {
       const data = await sendChat(message);
-      setResponse(data.answer);
-      setDotState("happy");
-      setTimeout(() => setDotState("listening"), 1800);
-    } catch {
-      setResponse("couldn't reach dot server — is `npm run server` running?");
-      setDotState("alert");
-      setTimeout(() => setDotState("listening"), 2500);
-    } finally {
-      setIsLoading(false);
+      showResponse(data.answer);
+      setState("happy");
+    } catch (err: any) {
+      showResponse(err?.message ?? "Could not connect to Dot server.", true);
+      setState("idle");
     }
   };
 
-  // ── ⌥ drag to reposition ──────────────────────────────────────────────────
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.altKey && e.button === 0) {
-      e.preventDefault();
-      getCurrentWindow().startDragging().catch(() => {});
-    }
+  const handleClose = () => {
+    setState("idle");
+    setResponse(null);
+    setIsError(false);
   };
 
-  const effectiveState: DotState = isRecording ? "recording" : dotState;
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60).toString().padStart(2, "0");
+    const s = (seconds % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
+  };
 
   return (
-    <div ref={containerRef} className="app" onMouseDown={handleMouseDown}>
-      <Dot
-        state={effectiveState}
-        onClick={handleDotClick}
-        onDoubleClick={handleDoubleClick}
-        recordingTime={recordingTime}
-      />
-      {statusText && (
-        <div className={`status-label ${statusDone ? "status-label--done" : ""}`}>
-          {statusText}
+    <div className="app">
+      <Dot state={state} onClick={handleDotClick} onLongPress={handleLongPress} />
+
+      {state === "thinking" && <ThinkingText />}
+
+      {state === "recording" && (
+        <div className="recording-info">
+          <span className="rec-dot" />
+          <span className="rec-time">{formatTime(recordingTime)}</span>
         </div>
       )}
-      {isExpanded && (
-        <Input
-          onSubmit={handleSubmit}
-          onClose={collapse}
-          response={response}
-          isLoading={isLoading || dotState === "thinking"}
-        />
+
+      {state === "listening" && (
+        <Input onSubmit={handleSubmit} onClose={handleClose} />
+      )}
+
+      {response && (state === "happy" || state === "idle") && (
+        <Response text={response} onDismiss={handleClose} isError={isError} />
+      )}
+
+      {state === "idle" && !response && (
+        <span className="hint">click to ask · hold to record</span>
       )}
     </div>
   );
 }
+
+export default App;

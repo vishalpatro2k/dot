@@ -183,6 +183,16 @@ def main():
     if not Path(args.wav).exists():
         sys.exit(f"Error: file not found: {args.wav}")
 
+    # Guard against empty/too-short recordings before spending time on whisper.
+    # 44100 Hz * 2 ch * 2 bytes = ~176 KB/s; require at least ~1 second of audio.
+    wav_bytes = Path(args.wav).stat().st_size
+    if wav_bytes < 180_000:
+        sys.exit(
+            "Error: Recording too short or silent. "
+            "Make sure BlackHole 2ch is set as your Output device (System Settings → Sound) "
+            "so meeting audio routes through it before you start recording."
+        )
+
     _load_env()
     hf_token = args.hf_token or os.environ.get("HF_TOKEN", "")
     if not hf_token:

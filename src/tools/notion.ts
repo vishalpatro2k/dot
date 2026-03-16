@@ -10,7 +10,7 @@
  * 3. For each database: open in Notion → ... → Connections → add integration
  */
 
-import { Client, isFullPage } from "@notionhq/client";
+import { Client, isFullPage, LogLevel } from "@notionhq/client";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 
 // Format a date as YYYY-MM-DD in local timezone (not UTC)
@@ -45,7 +45,7 @@ export class NotionCalendarTool {
       return false;
     }
 
-    this.client = new Client({ auth: token });
+    this.client = new Client({ auth: token, logLevel: LogLevel.ERROR });
 
     try {
       // Discover databases by searching all pages and extracting their parent database IDs
@@ -170,6 +170,84 @@ export class NotionCalendarTool {
     }
 
     return { id: page.id, title, database: dbName, date, endDate, durationHours, status, url: page.url };
+  }
+
+  getDatabaseIdByName(pattern: string): string | undefined {
+    const p = pattern.toLowerCase();
+    for (const [id, name] of this.databases) {
+      if (name.toLowerCase().includes(p)) return id;
+    }
+    return undefined;
+  }
+
+  async createEntry(databaseId: string, entry: {
+    title: string;
+    start: Date;
+    end?: Date;
+  }): Promise<string | null> {
+    if (!this.client) return null;
+    try {
+      const db = await this.client.databases.retrieve({ database_id: databaseId });
+      const props = db.properties as Record<string, any>;
+
+      const properties: Record<string, any> = {};
+
+      // Title
+      for (const [name, prop] of Object.entries(props)) {
+        if (prop.type === "title") {
+          properties[name] = { title: [{ text: { content: entry.title } }] };
+          break;
+        }
+      }
+
+      // Date (start + optional end for duration formula)
+      for (const [name, prop] of Object.entries(props)) {
+        if (prop.type === "date") {
+          properties[name] = {
+            date: {
+              start: entry.start.toISOString(),
+              ...(entry.end ? { end: entry.end.toISOString() } : {}),
+            },
+          };
+          break;
+        }
+      }
+
+      const page = await this.client.pages.create({
+        parent: { database_id: databaseId },
+        properties,
+      });
+      return page.id;
+    } catch (err) {
+      console.error("Notion createEntry failed:", err);
+      return null;
+    }
+  }
+
+  async updateEntryDate(pageId: string, start: Date, end: Date): Promise<void> {
+    if (!this.client) return;
+    try {
+      const page = await this.client.pages.retrieve({ page_id: pageId }) as any;
+      const dbId = page.parent?.database_id;
+      if (!dbId) return;
+
+      const db = await this.client.databases.retrieve({ database_id: dbId });
+      const props = db.properties as Record<string, any>;
+
+      for (const [name, prop] of Object.entries(props)) {
+        if (prop.type === "date") {
+          await this.client.pages.update({
+            page_id: pageId,
+            properties: {
+              [name]: { date: { start: start.toISOString(), end: end.toISOString() } },
+            },
+          });
+          break;
+        }
+      }
+    } catch (err) {
+      console.error("Notion updateEntryDate failed:", err);
+    }
   }
 
   async getContextString(date?: Date): Promise<string> {

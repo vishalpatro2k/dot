@@ -48,6 +48,12 @@ export class MemoryStore {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS kv_store (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
       CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
       CREATE INDEX IF NOT EXISTS idx_conversations_date ON conversations(created_at);
     `);
@@ -172,6 +178,27 @@ export class MemoryStore {
       conversations: convCount,
       totalCost: totalCost,
     };
+  }
+
+  /**
+   * Save arbitrary JSON value (for wellness stats, learning patterns, etc.)
+   */
+  saveKV(key: string, value: unknown): void {
+    if (!this.db) return;
+    this.db.prepare(`
+      INSERT INTO kv_store (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+    `).run(key, JSON.stringify(value));
+  }
+
+  /**
+   * Retrieve a previously saved JSON value. Returns null if not found.
+   */
+  getKV<T = unknown>(key: string): T | null {
+    if (!this.db) return null;
+    const row = this.db.prepare("SELECT value FROM kv_store WHERE key = ?").get(key) as { value: string } | undefined;
+    if (!row) return null;
+    try { return JSON.parse(row.value) as T; } catch { return null; }
   }
 
   /**
