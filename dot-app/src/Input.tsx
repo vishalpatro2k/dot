@@ -36,16 +36,18 @@ export default function Input({ onSubmit, onClose, response, isLoading }: InputP
   return (
     <div className="input-wrapper">
       <form onSubmit={handleSubmit}>
-        <input
-          ref={inputRef}
-          className="dot-input"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder={isLoading ? "thinking…" : "ask dot…"}
-          disabled={isLoading}
-          autoComplete="off"
-          spellCheck={false}
-        />
+        <div className="input-area">
+          <input
+            ref={inputRef}
+            className="dot-input"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder={isLoading ? "thinking…" : "ask dot…"}
+            disabled={isLoading}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
       </form>
       {response && (
         <div className="dot-response">{response}</div>

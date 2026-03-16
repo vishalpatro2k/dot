@@ -1,4 +1,4 @@
-import React, { useRef } from "react";
+import { useRef } from "react";
 
 export type DotState =
   | "idle"
@@ -49,7 +49,7 @@ export default function Dot({ state, onClick, onDoubleClick, recordingTime = 0 }
   return (
     <div className="dot-container">
       <div
-        className={`dot dot--${state}`}
+        className={`dot ${state}`}
         onClick={handleClick}
         title="Click to chat · Double-click to record"
       />

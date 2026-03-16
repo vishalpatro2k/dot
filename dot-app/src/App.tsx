@@ -7,9 +7,9 @@ import Input from "./Input";
 import { sendChat, startRecording, stopRecording, getStatus } from "./api";
 
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
-const COLLAPSED_SIZE  = new LogicalSize(160, 60);
-const STATUS_SIZE     = new LogicalSize(200, 86);
-const EXPANDED_SIZE   = new LogicalSize(280, 160);
+const COLLAPSED_SIZE  = new LogicalSize(108, 72);
+const STATUS_SIZE     = new LogicalSize(270, 126);
+const EXPANDED_SIZE   = new LogicalSize(300, 290);
 
 export default function App() {
   const [dotState, setDotState]           = useState<DotState>("idle");
