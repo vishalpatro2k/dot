@@ -363,7 +363,8 @@ NEVER:
   async chat(
     userMessage: string,
     taskType?: TaskType,
-    additionalContext?: string
+    additionalContext?: string,
+    priorTurns: Array<{ role: "user" | "assistant"; content: string }> = []
   ): Promise<RouterResponse> {
     // Infer task type if not provided
     const inferredTaskType = taskType || this.inferTaskType(userMessage);
@@ -389,8 +390,10 @@ NEVER:
     // Add user message to history
     this.conversationHistory.push({ role: "user", content: userMessage });
 
-    // Keep last 10 messages for context
-    const recentHistory = this.conversationHistory.slice(-10);
+    // Keep last 10 messages for context; if priorTurns provided, use them instead
+    const recentHistory = priorTurns.length > 0
+      ? [...priorTurns, { role: "user" as const, content: userMessage }]
+      : this.conversationHistory.slice(-10);
 
     try {
       const response = await this.client.messages.create({
@@ -490,7 +493,8 @@ NEVER:
       tasks?: string;
       health?: string;
       memory?: string;
-    }
+    },
+    priorTurns: Array<{ role: "user" | "assistant"; content: string }> = []
   ): Promise<RouterResponse> {
     const contextParts: string[] = [];
 
@@ -517,7 +521,7 @@ NEVER:
       ? contextParts.join("\n\n")
       : undefined;
 
-    return this.chat(userMessage, undefined, additionalContext);
+    return this.chat(userMessage, undefined, additionalContext, priorTurns);
   }
 }
 

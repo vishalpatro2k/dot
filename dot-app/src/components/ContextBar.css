@@ -1,0 +1,25 @@
+.context-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  font-size: 11px;
+  margin-bottom: 10px;
+}
+
+.ctx-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ctx-dot.green  { background: #4ade80; box-shadow: 0 0 6px #4ade8066; }
+.ctx-dot.red    { background: #f87171; box-shadow: 0 0 6px #f8717166; }
+.ctx-dot.yellow { background: #fbbf24; box-shadow: 0 0 6px #fbbf2466; }
+.ctx-dot.gray   { background: rgba(255,255,255,0.25); }
+
+.ctx-left  { color: rgba(255, 255, 255, 0.6); flex: 1; }
+.ctx-right { color: rgba(255, 255, 255, 0.35); font-family: 'IBM Plex Mono', monospace; font-size: 10px; }

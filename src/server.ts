@@ -36,6 +36,11 @@ import { smartScheduler } from "./tools/smart-scheduling.js";
 import { goalTracker } from "./tools/goals.js";
 import { predictiveNudges } from "./tools/predictive-nudges.js";
 import { actionExecutor } from "./tools/action-executor.js";
+import { conversationManager } from "./tools/conversation-manager.js";
+import { userProfile } from "./tools/user-profile.js";
+import { followUpGenerator } from "./tools/follow-up-suggestions.js";
+import { getContextBarState } from "./tools/context-bar.js";
+import { isOnboardingComplete, completeOnboarding, generateWelcomeMessage } from "./tools/onboarding.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -146,10 +151,63 @@ app.post("/chat", async (req, res) => {
   if (!message) return void res.status(400).json({ error: "message required" });
   try {
     const r = await agent.ask(message);
-    res.json({ answer: r.answer, model: r.model, cost: r.cost });
+    res.json({ answer: r.answer, model: r.model, cost: r.cost, suggestions: r.suggestions ?? [] });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// GET /context — real-time context bar state + quick actions
+app.get("/context", async (_req, res) => {
+  try {
+    const contextBar = await getContextBarState();
+    const quickActions = followUpGenerator.quickActions();
+    res.json({ contextBar, quickActions });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /profile
+app.get("/profile", (_req, res) => {
+  res.json(userProfile.load());
+});
+
+// POST /profile
+app.post("/profile", (req, res) => {
+  try {
+    userProfile.save(req.body ?? {});
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /profile/name
+app.post("/profile/name", (req, res) => {
+  const { name } = req.body ?? {};
+  if (!name) return void res.status(400).json({ error: "name required" });
+  userProfile.setName(name);
+  res.json({ success: true, name });
+});
+
+// POST /conversation/clear
+app.post("/conversation/clear", (_req, res) => {
+  conversationManager.clear();
+  res.json({ success: true });
+});
+
+// GET /onboarding
+app.get("/onboarding", (_req, res) => {
+  res.json({ completed: isOnboardingComplete(), name: userProfile.getName() });
+});
+
+// POST /onboarding
+app.post("/onboarding", (req, res) => {
+  const { name, preferences } = req.body ?? {};
+  if (!name) return void res.status(400).json({ error: "name required" });
+  completeOnboarding(name, preferences);
+  res.json({ success: true, welcome: generateWelcomeMessage(name) });
 });
 
 // GET /brief — morning briefing via agent (LLM-formatted)
@@ -629,6 +687,8 @@ async function start() {
     console.log("  GET  /schedule/find  GET /schedule/focus-block  POST /schedule/conflicts");
     console.log("  GET  /goals  POST /goals  DELETE /goals/:id");
     console.log("  GET  /insights  POST /action");
+    console.log("  GET  /context  GET/POST /profile  POST /profile/name");
+    console.log("  POST /conversation/clear  GET/POST /onboarding");
     console.log("  POST /apple-health");
     console.log("  GET  /apple-health/summary");
     console.log("  GET  /apple-health/insights\n");

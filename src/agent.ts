@@ -23,12 +23,16 @@ import { personalityEngine } from "./tools/personality-engine.js";
 import { goalTracker } from "./tools/goals.js";
 import { predictiveNudges } from "./tools/predictive-nudges.js";
 import { actionExecutor } from "./tools/action-executor.js";
+import { conversationManager } from "./tools/conversation-manager.js";
+import { userProfile } from "./tools/user-profile.js";
+import { followUpGenerator, type Suggestion } from "./tools/follow-up-suggestions.js";
 
 export interface AgentResponse {
   answer: string;
   model: string;
   cost: number;
   cached: boolean;
+  suggestions?: Suggestion[];
 }
 
 export class PersonalAgent {
@@ -43,6 +47,7 @@ export class PersonalAgent {
     console.log("\n🤖 Initializing Personal Agent...\n");
 
     memory.init();
+    userProfile.load();
     await calendar.init();
     await notion.init();
     await slack.init();
@@ -115,8 +120,18 @@ export class PersonalAgent {
     const learnedContext = learningMemory.generateContextForPrompt();
     const personalityContext = personalityEngine.getContextString();
     const goalsContext = isGoals ? "" : goalTracker.getContextString();
-    const memoryContext = [memory.getContextString(), learnedContext, goalsContext].filter(Boolean).join("\n\n");
+    const profileContext = userProfile.generateContext();
+    const convoContext = conversationManager.buildContext();
+    const memoryContext = [memory.getContextString(), learnedContext, goalsContext, profileContext, convoContext]
+      .filter(Boolean)
+      .join("\n\n");
 
+    // Build conversation-aware message array for follow-ups
+    const isFollowUp = this.isFollowUpQuery(query);
+    const recentTurns = isFollowUp ? conversationManager.getRecentTurns(4) : [];
+
+    // Track conversation
+    conversationManager.addMessage("user", query);
     memory.logConversation("user", query);
 
     const response = await this.router.chatWithContext(query, {
@@ -126,20 +141,34 @@ export class PersonalAgent {
       health: (!isBrief && !isRecap && healthContext) ? healthContext : undefined,
       tasks: (!isBrief && !isRecap && tasksContext) ? tasksContext : undefined,
       memory: [memoryContext, personalityContext].filter(Boolean).join("\n\n") || undefined,
-    });
+    }, recentTurns);
 
+    // Track response and extract context
+    const mentionCtx = conversationManager.extractMentions(query, response.content);
+    conversationManager.addMessage("assistant", response.content, mentionCtx);
     memory.logConversation("assistant", response.content, response.model, response.estimatedCost);
     this.extractAndRemember(query, response.content);
-
-    // Update learning memory
     learningMemory.learn(query);
+
+    // Generate follow-up suggestions
+    const suggestions = followUpGenerator.generate(query, response.content, mentionCtx);
 
     return {
       answer: response.content,
       model: response.model.includes("haiku") ? "Haiku" : "Sonnet",
       cost: response.estimatedCost,
       cached: response.cacheReadTokens > 0,
+      suggestions,
     };
+  }
+
+  private isFollowUpQuery(query: string): boolean {
+    const q = query.trim();
+    return (
+      /^(yes|no|yeah|nope|sure|ok|okay|do it|go ahead|that|this|it|them|those|the \d|first|second|last|other)\b/i.test(q) ||
+      /^(what about|how about|and |also |tell me more|more on|expand)/i.test(q) ||
+      /^(that one|which one|the \w+ one)/i.test(q)
+    );
   }
 
   async morningBrief(): Promise<AgentResponse> {
