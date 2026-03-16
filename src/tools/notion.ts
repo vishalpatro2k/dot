@@ -245,8 +245,11 @@ export class NotionCalendarTool {
           break;
         }
       }
-    } catch (err) {
-      console.error("Notion updateEntryDate failed:", err);
+    } catch (err: any) {
+      // Silently skip archived pages or validation errors — best-effort update
+      if (err?.code !== "validation_error") {
+        console.error("Notion updateEntryDate failed:", err?.message ?? err);
+      }
     }
   }
 
